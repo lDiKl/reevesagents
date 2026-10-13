@@ -124,6 +124,7 @@ export interface GlobalConfig {
   max_lifetime_ms: number           // auto-reap agents older than this; 0 disables; default 0
   default_permissions: Permissions  // default 'ask'
   language: LanguageCode            // default 'en'
+  web_theme: 'dark' | 'light'        // Web UI appearance; default 'dark'
 }
 
 export interface Config {
