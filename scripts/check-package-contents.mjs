@@ -18,6 +18,7 @@ const required = new Set([
   'dist/web/xterm.css',
   'dist/web/addon-fit.js',
   'dist/web/brand-duck.json',
+  'dist/web/favicon.png',
 ])
 
 const forbiddenPrefixes = [

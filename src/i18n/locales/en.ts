@@ -166,6 +166,8 @@ export const en = {
   'web.cancel': 'Cancel',
   'web.closed': 'closed',
   'web.config': 'Config',
+  'web.themeDark': 'Dark',
+  'web.themeLight': 'Light',
   'web.configSubtitle': 'Edit global settings.',
   'web.connecting': 'connecting',
   'web.connectionError': 'connection error',

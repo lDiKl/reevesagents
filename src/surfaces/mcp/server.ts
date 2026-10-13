@@ -510,6 +510,7 @@ const TOOLS: ToolDef[] = [
         max_lifetime_ms: { type: 'number', description: 'Auto-reap any agent older than this many ms on the next sweep. 0 disables lifetime reaping.' },
         default_permissions: { type: 'string', enum: ['ask', 'skip'], description: 'Permission mode used when a spawn omits one.' },
         language: { type: 'string', description: 'UI language code for the TUI and web UI, e.g. en, tr.' },
+        web_theme: { type: 'string', enum: ['dark', 'light'], description: 'Web UI appearance.' },
       },
     },
     handler: (a) => {

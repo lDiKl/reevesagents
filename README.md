@@ -240,6 +240,10 @@ Two environment variables override the default paths:
 - `REEVES_REGISTRY`: state root override for `runs/`, `history/`, and `presets/`.
 - `REEVES_CONFIG`: config file path override.
 
+In the Web UI, open **Config** and choose **Web theme → Light** or **Dark**, then
+save. The choice is stored in `config.json` and also applies to the embedded
+terminal. The default is Dark. From the CLI, use `reevesagents config web_theme light`.
+
 One registry per tmux server: the background orphan sweep judges session
 ownership against the current registry, so two registries must not share one
 tmux server.
