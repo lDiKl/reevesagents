@@ -141,6 +141,10 @@
     'web.statusEnded': 'ended',
     'web.statusStale': 'stale',
     'web.statusRunning': 'running',
+    'web.needsAttention': 'needs attention',
+    'web.needsApproval': 'approval needed',
+    'web.needsAnswer': 'answer needed',
+    'web.hasQuestion': 'question waiting',
     'web.unknown': 'unknown',
     'web.useProvider': 'use {{name}}',
     'web.agentControl': 'Agent control',
@@ -905,6 +909,9 @@
   function renderSidebar() {
     const runsWithAgents = runs.filter(r => r.status !== 'ended' && r.terminals.length > 0)
     const agentCount = runsWithAgents.reduce((sum, run) => sum + run.terminals.length, 0)
+    const attentionCount = runsWithAgents.reduce(
+      (sum, run) => sum + run.terminals.filter(agent => agent.attention).length, 0)
+    updateAttentionTitle(attentionCount)
     el.sidebarCount.textContent = String(agentCount)
     el.sidebarEmpty.hidden = runsWithAgents.length > 0
     if (!el.sidebarEmpty.hidden) {
@@ -1146,6 +1153,25 @@
 
     const tail = document.createElement('span')
     tail.className = 'card-tail'
+    if (agent.attention) {
+      // The operator may be on another tab or window: the badge must be visible without
+      // hovering, and the dot blinks so it reads as "act now", not as another status chip.
+      const attention = document.createElement('span')
+      attention.className = 'card-attention'
+      attention.dataset.reason = agent.attention.reason
+      const pulse = document.createElement('span')
+      pulse.className = 'attention-pulse'
+      pulse.setAttribute('aria-hidden', 'true')
+      attention.appendChild(pulse)
+      const label = document.createElement('span')
+      label.textContent = attentionLabel(agent.attention.reason)
+      attention.appendChild(label)
+      attention.title = agent.attention.detail
+        ? `${attentionLabel(agent.attention.reason)} · ${agent.attention.detail}`
+        : attentionLabel(agent.attention.reason)
+      card.dataset.attention = agent.attention.reason
+      card.appendChild(attention)
+    }
     const dot = document.createElement('span')
     dot.className = 'dot'
     dot.dataset.status = agent.status
@@ -2174,6 +2200,21 @@
     if (status === 'stale') return t('web.statusStale')
     if (status === 'running') return t('web.statusRunning')
     return status
+  }
+
+  function attentionLabel(reason) {
+    if (reason === 'approval') return t('web.needsApproval')
+    if (reason === 'input') return t('web.needsAnswer')
+    if (reason === 'question') return t('web.hasQuestion')
+    return t('web.needsAttention')
+  }
+
+  // An inactive tab keeps its title: "(!2) ReevesAgents web" is the only signal that
+  // survives when the browser chrome hides the badge. The prefix is stripped from the
+  // live title instead of a captured one, so brand/theme changes to the title survive.
+  function updateAttentionTitle(count) {
+    const raw = document.title.replace(/^\(\d+\)\s*/, '')
+    document.title = count > 0 ? `(${count}) ${raw}` : raw
   }
 
   function shortIso(value) {

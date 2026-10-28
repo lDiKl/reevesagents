@@ -1,0 +1,217 @@
+import { describe, expect, it } from 'vitest'
+import {
+  detectAgentAttention,
+  detectHermesAttention,
+  nextAttentionState,
+  sweepAttention,
+  type AttentionSweepOptions,
+} from '../src/core/attention.js'
+import type { AgentRecord, AttentionState } from '../src/core/types.js'
+
+// Captured from a live `hermes chat` pane (approvals.mode=manual, ru UI): the blocking
+// approval modal as prompt_toolkit draws it. Fixtures stay verbatim — if Hermes changes
+// its chrome, this test is the alarm that the detector needs a new marker.
+const HERMES_APPROVAL_MODAL = `
+╭────────────────────────────────────────────────╮
+│ ⚠️   Опасная команда                            │
+│                                                │
+│ rm -rf /tmp/reeves-probe-attention2            │
+│                                                │
+│ ❯ 1. Разрешить один раз                        │
+│   2. Разрешить на этот сеанс                   │
+│   3. Добавить в постоянный список разрешённых  │
+│   4. Отклонить                                 │
+│                                                │
+│ delete in root path                            │
+╰────────────────────────────────────────────────╯
+  ↑/↓ — выбрать, Enter — подтвердить  (38s)
+── ⠦ 💻 rm -rf /tmp/reeves-probe-attention2 · 26s · ↓ 187 tok ──────────────
+⚠ ❯
+──────────────────────────────────────────────────────────────────────────
+ ☤ deepseek-v4.1-flash · 26.4K/1M · [░░░] 3% · ◎ 31.3% · ↑ 89 т/с · 1m · ⏱ 25 с · /tmp
+`
+
+// Captured from a live `hermes chat` pane (ru UI): the clarify picker. Unlike the
+// approval modal it is not an approval — the body ends with a question.
+const HERMES_CLARIFY_MODAL = `
+╭─ Hermes Agent ждёт вашего ответа ──────────────╮
+│ 1 вопрос                                       │
+│ ▸ Синий или зелёный?                           │
+│   ❯ 1. Синий (Recommended)                     │
+│     2. Зелёный                                 │
+│     3. Другое (введите свой ответ)             │
+╰────────────────────────────────────────────────╯
+
+  ↑/↓ — выбрать, Enter — зафиксировать, Tab — следующий вопрос  (598s)
+── ⠧ ❓ Синий или зелёный? · 5s · ↓ 197 tok ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Задать вопрос: синий или зелёный ─
+? ❯
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☤ deepseek-v4.1-flash · 26.6K/1M · [░░░░░░░░░░] 3% · ◎ 57.0% · ◷ 1.6с · ↑ 60 т/с · 19s · ⏱ 4 с · /tmp
+`
+
+const HERMES_IDLE_QUESTION = `
+● Готово: обновил home.php и снял замеры.
+
+  TTFB 125 → 78 мс, запросов 88 → 41.
+
+Нужно ли прогонять профиль ещё раз по листингу?
+──────────────────────────────────────────────────────────────────────────
+❯ Спросите о чём угодно или введите / для команд…
+──────────────────────────────────────────────────────────────────────────
+ ☤ deepseek-v4.1-flash · 76.8K/1M · [█░░] 7% · ◎ 95.7% · ◷ 4.3с · 8m · ⏲ 0s · ✓ 2 мин · ~/projects/referat-ok.com.ua
+`
+
+const HERMES_IDLE_STATEMENT = `
+● Готово. Изменения закоммичены локально.
+
+──────────────────────────────────────────────────────────────────────────
+❯ Введите сообщение…
+──────────────────────────────────────────────────────────────────────────
+ ☤ deepseek-v4.1-flash · 40.0K/1M · [█░░] 4% · ◎ 92.0% · ◷ 3.0с · 5m · ⏲ 0s · ✓ 1 мин · /tmp
+`
+
+const HERMES_BUSY = `
+● Читаю home.php
+
+── ⠸ 💻 grep -rn "orderby" wp-content/themes/ · 8s · ↓ 759 tok ───────────
+☤ ❯ пишите, чтобы перенаправить этот ход · Tab ставит в очередь на потом
+──────────────────────────────────────────────────────────────────────────
+ ☤ deepseek-v4.1-flash · 38.1K/1M · [█░░] 4% · ◎ 34.2% · ◷ 1.7с · ↑ 169 т/с · 3m · ⏱ 7 с · /tmp
+`
+
+const HERMES_BLOCKED_GATE = `
+BLOCKED: Command was not approved: the approval prompt could not be delivered or was not answered.
+retry this command, do NOT rephrase it, and do NOT attempt the same outcome via a different command.
+──────────────────────────────────────────────────────────────────────────
+❯ Спросите о чём угодно или введите / для команд…
+──────────────────────────────────────────────────────────────────────────
+ ☤ deepseek-v4.1-flash · 26.4K/1M · [█░░] 3% · ◎ 31.3% · ◷ 2.1с · 1m · ⏲ 0s · /tmp
+`
+
+describe('Hermes attention detection', () => {
+  it('detects a blocking approval modal and keeps the command as the detail', () => {
+    const detected = detectHermesAttention(HERMES_APPROVAL_MODAL)
+    expect(detected?.reason).toBe('approval')
+    expect(detected?.detail).toContain('rm -rf /tmp/reeves-probe-attention2')
+  })
+
+  it('classifies a clarify picker as a question, not an approval', () => {
+    const detected = detectHermesAttention(HERMES_CLARIFY_MODAL)
+    expect(detected?.reason).toBe('input')
+    expect(detected?.detail).toContain('Синий или зелёный')
+  })
+
+  // A finished turn that ends with a question looks exactly the same in the pane as one
+  // whose answer is already typed into the input box, so it must NOT raise a badge: that
+  // heuristic hung "ждёт ответа" on agents the operator had already answered.
+  it('does not flag a finished turn that ends with a question', () => {
+    expect(detectHermesAttention(HERMES_IDLE_QUESTION)).toBeNull()
+  })
+
+  it('still detects a modal when tmux pads the pane with blank rows', () => {
+    const padded = `${HERMES_APPROVAL_MODAL}\n\n\n\n\n\n`
+    expect(detectHermesAttention(padded)?.reason).toBe('approval')
+  })
+
+  it('stays quiet on a finished turn that states a result', () => {
+    expect(detectHermesAttention(HERMES_IDLE_STATEMENT)).toBeNull()
+  })
+
+  it('stays quiet while the agent is working', () => {
+    expect(detectHermesAttention(HERMES_BUSY)).toBeNull()
+  })
+
+  it('flags a command blocked before any prompt could be shown', () => {
+    const detected = detectHermesAttention(HERMES_BLOCKED_GATE)
+    expect(detected?.reason).toBe('approval')
+  })
+
+  it('ignores ANSI colour codes around the modal', () => {
+    const coloured = HERMES_APPROVAL_MODAL.replace('╭', '\u001b[33m╭\u001b[0m')
+    expect(detectHermesAttention(coloured)?.reason).toBe('approval')
+  })
+
+  it('reports nothing for providers without a detector yet', () => {
+    expect(detectAgentAttention({ provider: 'codex' }, HERMES_APPROVAL_MODAL)).toBeNull()
+    expect(detectAgentAttention({ provider: 'hermes' }, HERMES_APPROVAL_MODAL)?.reason).toBe('approval')
+  })
+})
+
+describe('attention persistence', () => {
+  it('keeps the original `since` while the same prompt is still open', () => {
+    const first = nextAttentionState(null, { reason: 'approval', detail: 'rm -rf x' }, '2026-10-28T10:00:00.000Z')
+    const again = nextAttentionState(first, { reason: 'approval', detail: 'rm -rf x' }, '2026-10-28T10:00:30.000Z')
+    expect(again?.since).toBe('2026-10-28T10:00:00.000Z')
+  })
+
+  it('restamps `since` when a different prompt appears', () => {
+    const first = nextAttentionState(null, { reason: 'approval', detail: 'rm -rf x' }, '2026-10-28T10:00:00.000Z')
+    const second = nextAttentionState(first, { reason: 'question', detail: 'continue?' }, '2026-10-28T10:05:00.000Z')
+    expect(second).toEqual({ reason: 'question', detail: 'continue?', since: '2026-10-28T10:05:00.000Z' })
+  })
+
+  it('clears the state when the prompt is gone', () => {
+    const first = nextAttentionState(null, { reason: 'approval', detail: 'x' }, '2026-10-28T10:00:00.000Z')
+    expect(nextAttentionState(first, null, '2026-10-28T10:01:00.000Z')).toBeNull()
+  })
+})
+
+function agent(overrides: Partial<AgentRecord> = {}): AgentRecord {
+  return {
+    id: 'a1',
+    run_id: 'r1',
+    nickname: 'Hermes',
+    provider: 'hermes',
+    model: '',
+    role: 'root',
+    working_dir: '/tmp',
+    task: '',
+    task_status: 'working',
+    task_note: '',
+    tmux_session: 'reeves-x-aaaaaaaa',
+    tmux_window_id: '@1',
+    tmux_pane_id: '%1',
+    pane_pid: 123,
+    rc_enabled: false,
+    permissions: 'ask',
+    inbox: [],
+    last_seen: 0,
+    started_at: '2026-10-28T10:00:00.000Z',
+    ended_at: null,
+    ...overrides,
+  }
+}
+
+describe('attention sweep', () => {
+  function sweep(paneText: string, previous: AttentionState | null = null) {
+    const updates: Array<{ id: string; patch: { attention?: AttentionState | null } }> = []
+    const options: AttentionSweepOptions = {
+      capture: () => paneText,
+      now: () => new Date('2026-10-28T11:00:00.000Z'),
+      runs: () => [{ id: 'r1', ended_at: null } as never],
+      agents: () => [agent({ attention: previous })],
+      update: (_runId, agentId, patch) => { updates.push({ id: agentId, patch }) },
+    }
+    const changed = sweepAttention(options)
+    return { changed, updates }
+  }
+
+  it('persists a newly detected prompt', () => {
+    const { changed, updates } = sweep(HERMES_APPROVAL_MODAL)
+    expect(changed).toBe(1)
+    expect(updates[0]?.patch.attention?.reason).toBe('approval')
+  })
+
+  it('does not rewrite the record while the same prompt stays open', () => {
+    const open: AttentionState = { reason: 'approval', detail: 'rm -rf /tmp/reeves-probe-attention2', since: '2026-10-28T10:00:00.000Z' }
+    const { changed } = sweep(HERMES_APPROVAL_MODAL, open)
+    expect(changed).toBe(0)
+  })
+
+  it('clears a stale prompt once the pane no longer shows it', () => {
+    const open: AttentionState = { reason: 'approval', detail: 'old', since: '2026-10-28T10:00:00.000Z' }
+    const { changed, updates } = sweep(HERMES_IDLE_STATEMENT, open)
+    expect(changed).toBe(1)
+    expect(updates[0]?.patch.attention).toBeNull()
+  })
+})

@@ -1078,6 +1078,47 @@ button { letter-spacing: 0; }
   padding-left: calc(38px + var(--s-3));
 }
 
+/* Operator attention: "this agent is blocked on a human". Deliberately louder than the
+   status chip — a pulsing dot plus a bounded pill — because this is the one signal that
+   must reach someone looking at another tab. */
+.card-attention {
+  --attention-color: var(--warn);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 6px;
+  border: 1px solid var(--attention-color);
+  border-radius: 999px;
+  color: var(--attention-color);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.card-attention[data-reason="approval"] { --attention-color: var(--error); }
+
+.attention-pulse {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--attention-color);
+  animation: attention-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes attention-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(0.72); }
+}
+
+.card[data-attention] {
+  box-shadow: inset 2px 0 0 var(--warn);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attention-pulse { animation: none; }
+}
+
 .dot {
   width: 8px;
   height: 8px;

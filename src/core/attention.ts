@@ -1,0 +1,219 @@
+// Attention detection: is this agent blocked on a human?
+// Input: the last lines of an agent's tmux pane. Output: an AttentionState or null.
+// Invariant: detection is a pure read of pane text. The sweep writes only the agent
+// record's `attention` field, and only when the detected state actually changes, so the
+// registry (and the SSE stream built from it) never churns on every poll.
+//
+// Why pane text: none of the provider CLIs expose a machine-readable "I am waiting for a
+// human" state. Hermes, Claude Code and Codex all render a blocking overlay in their own
+// TUI, so the pane is the only surface that is true for every provider.
+
+import { execTmux } from './tmux.js'
+import { listAgents, listRuns, updateAgent } from './runs.js'
+import type { AgentRecord, AttentionReason, AttentionState, Provider } from './types.js'
+
+// How much pane history a detector may look at. The status area is the last few lines;
+// the modal frame and its options sit right above it.
+export const SCAN_LINES = 40
+
+export interface DetectedAttention {
+  reason: AttentionReason
+  detail: string
+}
+
+export type AttentionDetector = (_pane: string) => DetectedAttention | null
+
+// Box drawing used by the blocking modal (top-left and bottom-left corners).
+const BOX_CORNER = /[╭╰]/
+// A numbered, selectable option inside the modal: "│ ❯ 1. Разрешить один раз".
+const NUMBERED_OPTION = /^\s*[│┃|]\s*(?:❯\s*)?\d+\.\s+\S/
+// The navigation hint under the modal, plus its answer countdown.
+const NAV_HINT = /↑\/↓/
+const ANSWER_COUNTDOWN = /\(\s*\d+\s*s\s*\)/
+
+// Multilingual keyword sets. Hermes localizes its prompts (10 languages), and the
+// operator may run agents in any of them, so classification cannot key on English.
+const APPROVAL_WORDS = [
+  'approv', 'approb', 'одобр', 'разреш', 'отклон', 'опасн',
+  'genehmig', 'freigabe', 'aprob', 'onay', 'الموافق', '批准', '危险',
+  'consent', 'dangerous', 'risky', 'pericoloso', 'rischioso', 'tehlike',
+]
+const QUESTION_WORDS = [
+  'вопрос', 'question', 'frage', 'pregunta', 'pergunta', 'domanda', 'soru', '问题', 'سؤال',
+]
+
+function stripAnsi(text: string): string {
+  // CSI/OSC/escape sequences, then a stray CR left by full-frame repaints. Matching control
+  // characters is the whole point here, so the lint rule is off for these two lines only.
+  /* eslint-disable no-control-regex */
+  return text
+    .replace(/\u001b\][^\u0007]*\u0007/g, '')
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/\r/g, '')
+  /* eslint-enable no-control-regex */
+}
+
+function cleanBoxLine(line: string): string {
+  return line.replace(/^[\s│┃|╭╮╰╯─━═]+/, '').replace(/[\s│┃|╭╮╰╯─━═]+$/, '').trim()
+}
+
+function truncate(text: string, max = 140): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text
+}
+
+function containsAny(haystack: string, needles: string[]): boolean {
+  const lower = haystack.toLowerCase()
+  return needles.some(needle => lower.includes(needle))
+}
+
+/**
+ * Hermes (`hermes chat`): a blocking approval / clarify / sudo modal, a gate that never
+ * reached the UI, or a finished turn whose last line is an open question.
+ *
+ * The modal is matched structurally (box corner + numbered option + ↑/↓ hint + countdown)
+ * so it works in every UI language; keywords only decide *which* kind of prompt it is.
+ */
+export function detectHermesAttention(paneText: string): DetectedAttention | null {
+  const lines = stripAnsi(paneText).split('\n')
+  // `tmux capture-pane` pads the pane to its full height, so the real tail sits above a
+  // run of blank rows. Drop those first, or "last 4 lines" means "4 empty rows".
+  while (lines.length > 0 && (lines[lines.length - 1] ?? '').trim() === '') lines.pop()
+  const tail = lines.slice(-SCAN_LINES)
+  const text = tail.join('\n')
+
+  const hasModal = BOX_CORNER.test(text)
+    && tail.some(line => NUMBERED_OPTION.test(line))
+    && NAV_HINT.test(text)
+    && ANSWER_COUNTDOWN.test(text)
+
+  if (hasModal) {
+    // The command / question being asked sits between the title and the first option.
+    const optionIndex = tail.findIndex(line => NUMBERED_OPTION.test(line))
+    const body = tail.slice(0, optionIndex === -1 ? tail.length : optionIndex)
+      .map(cleanBoxLine)
+      .filter(line => line.length > 0 && !line.startsWith('⚠'))
+    const detail = body.length > 0 ? body[body.length - 1]! : ''
+    // A modal that asks a question (clarify picker) is not an approval, whatever the UI
+    // language: the question mark lives in the prompt body, above the options.
+    const bodyText = body.join(' ')
+    const asksQuestion = bodyText.includes('?') || bodyText.includes('？')
+    const reason: AttentionReason = asksQuestion
+      ? 'input'
+      : containsAny(text, APPROVAL_WORDS)
+      ? 'approval'
+      : containsAny(text, QUESTION_WORDS)
+      ? 'input'
+      : 'approval'
+    return { reason, detail: truncate(detail) }
+  }
+
+  // A dangerous command that was refused before any UI could ask: the turn is over and
+  // the agent is waiting for a human to re-approve.
+  if (/BLOCKED:\s*Command was not approved/i.test(text)) {
+    return { reason: 'approval', detail: truncate('command was blocked, no approval could be delivered') }
+  }
+
+  // Deliberately no heuristic for "the last line ends with a question": a finished turn
+  // that asks something is indistinguishable from one whose answer is already sitting in
+  // the input box (the TUI keeps the old question on screen), so it produced badges that
+  // hung after the operator had answered. Attention is only for panes that *block*.
+  return null
+}
+
+// Providers with a detector. Everything else reports no attention for now; adding a
+// provider means adding one function here — the sweep, the API field and the web badge
+// are provider-agnostic.
+const DETECTORS: Partial<Record<Provider, AttentionDetector>> = {
+  hermes: detectHermesAttention,
+}
+
+export function detectAgentAttention(agent: Pick<AgentRecord, 'provider'>, paneText: string): DetectedAttention | null {
+  const detector = DETECTORS[agent.provider]
+  if (!detector) return null
+  return detector(paneText)
+}
+
+export function hasDetector(provider: Provider): boolean {
+  return Boolean(DETECTORS[provider])
+}
+
+export function nextAttentionState(
+  previous: AttentionState | null,
+  detected: DetectedAttention | null,
+  at: string,
+): AttentionState | null {
+  if (!detected) return null
+  if (previous && previous.reason === detected.reason && previous.detail === detected.detail) return previous
+  return { reason: detected.reason, detail: detected.detail, since: at }
+}
+
+export interface AttentionSweepOptions {
+  // Test seam: capture a pane by id. Defaults to `tmux capture-pane -p`.
+  capture?: (_paneId: string) => string
+  now?: () => Date
+  throttleMs?: number
+  runs?: typeof listRuns
+  agents?: typeof listAgents
+  update?: typeof updateAgent
+}
+
+function defaultCapture(paneId: string): string {
+  return execTmux(['capture-pane', '-p', '-S', String(-SCAN_LINES), '-t', paneId])
+}
+
+let lastSweepAt = 0
+
+/**
+ * One pass over every live agent: read its pane, detect attention, persist only changes.
+ * Cheap by design (one `tmux capture-pane` per agent) but never free, so callers use
+ * `sweepAttentionThrottled` from a timer instead of calling this per render.
+ */
+export function sweepAttention(options: AttentionSweepOptions = {}): number {
+  const capture = options.capture ?? defaultCapture
+  const now = options.now ? options.now() : new Date()
+  const at = now.toISOString()
+  const listRunsFn = options.runs ?? listRuns
+  const listAgentsFn = options.agents ?? listAgents
+  const update = options.update ?? updateAgent
+  let changed = 0
+
+  for (const run of listRunsFn()) {
+    if (run.ended_at) continue
+    for (const agent of listAgentsFn(run.id)) {
+      const previous = agent.attention ?? null
+      let detected: DetectedAttention | null = null
+      if (!agent.ended_at && !agent.headless && agent.tmux_pane_id) {
+        let paneText: string
+        try {
+          paneText = capture(agent.tmux_pane_id)
+        } catch {
+          // The window can disappear between the sweep and the capture; treat it as idle.
+          paneText = ''
+        }
+        detected = detectAgentAttention(agent, paneText)
+      }
+      const next = nextAttentionState(previous, detected, at)
+      if (next?.reason === previous?.reason && next?.detail === previous?.detail && next?.since === previous?.since) {
+        continue
+      }
+      if (next === null && previous === null) continue
+      update(run.id, agent.id, { attention: next })
+      changed += 1
+    }
+  }
+  lastSweepAt = now.getTime()
+  return changed
+}
+
+/** Sweep at most once per `throttleMs`; safe to call from a 1.5 s UI tick. */
+export function sweepAttentionThrottled(options: AttentionSweepOptions = {}): number {
+  const nowMs = options.now ? options.now().getTime() : Date.now()
+  const throttleMs = options.throttleMs ?? 2000
+  if (nowMs - lastSweepAt < throttleMs) return 0
+  return sweepAttention(options)
+}
+
+/** Reset the throttle marker (tests and run restarts). */
+export function resetAttentionSweepThrottle(): void {
+  lastSweepAt = 0
+}
