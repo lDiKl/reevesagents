@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   detectAgentAttention,
+  detectCodexAttention,
   detectHermesAttention,
   nextAttentionState,
   sweepAttention,
@@ -47,6 +48,26 @@ const HERMES_CLARIFY_MODAL = `
 ? ❯
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ☤ deepseek-v4.1-flash · 26.6K/1M · [░░░░░░░░░░] 3% · ◎ 57.0% · ◷ 1.6с · ↑ 60 т/с · 19s · ⏱ 4 с · /tmp
+`
+
+// Captured from a live `codex` pane (v0.165, `-a on-request -s workspace-write`): the
+// approval prompt. Codex renders a flat choice list, with no box frame.
+const CODEX_APPROVAL_PROMPT = `
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: May I create the requested approval probe file at /home/dmytro/codex-approval-probe2?
+
+  $ touch /home/dmytro/codex-approval-probe2
+
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with \`touch /home/dmytro/codex-approval-probe2\` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel
 `
 
 const HERMES_IDLE_QUESTION = `
@@ -131,7 +152,8 @@ describe('Hermes attention detection', () => {
     expect(detectHermesAttention(coloured)?.reason).toBe('approval')
   })
 
-  it('reports nothing for providers without a detector yet', () => {
+  it('only reads its own provider panes', () => {
+    expect(detectAgentAttention({ provider: 'cc' }, HERMES_APPROVAL_MODAL)).toBeNull()
     expect(detectAgentAttention({ provider: 'codex' }, HERMES_APPROVAL_MODAL)).toBeNull()
     expect(detectAgentAttention({ provider: 'hermes' }, HERMES_APPROVAL_MODAL)?.reason).toBe('approval')
   })
@@ -213,5 +235,33 @@ describe('attention sweep', () => {
     const { changed, updates } = sweep(HERMES_IDLE_STATEMENT, open)
     expect(changed).toBe(1)
     expect(updates[0]?.patch.attention).toBeNull()
+  })
+})
+
+describe('Codex attention detection', () => {
+  it('detects the command-approval prompt and shows the command', () => {
+    const detected = detectCodexAttention(CODEX_APPROVAL_PROMPT)
+    expect(detected?.reason).toBe('approval')
+    expect(detected?.detail).toBe('$ touch /home/dmytro/codex-approval-probe2')
+  })
+
+  it('does not mistake a numbered list in ordinary output for a prompt', () => {
+    const output = [
+      '• Plan:',
+      '  1. read the file',
+      '  2. change the config',
+      '  3. run the tests',
+      '› Ask Codex to do anything',
+    ].join('\n')
+    expect(detectCodexAttention(output)).toBeNull()
+  })
+
+  it('stays quiet while codex is working', () => {
+    const busy = ['› Run the tests', '• Working (2s • esc to interrupt)', ''].join('\n')
+    expect(detectCodexAttention(busy)).toBeNull()
+  })
+
+  it('is wired into the provider registry', () => {
+    expect(detectAgentAttention({ provider: 'codex' }, CODEX_APPROVAL_PROMPT)?.reason).toBe('approval')
   })
 })

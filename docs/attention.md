@@ -69,7 +69,8 @@ read the same record.
 
 ## Adding a provider
 
-Only `hermes` has a detector today. To add Claude Code, Codex or any other CLI:
+Detectors exist for `hermes` (approval and clarify modals) and `codex` (its command
+approval prompt). Claude Code and the rest still report nothing. To add one:
 
 1. Capture a real prompt: run the provider in a pane, trigger its approval overlay and
    `tmux capture-pane -p -S -40 -t <pane>`.

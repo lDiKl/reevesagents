@@ -120,11 +120,45 @@ export function detectHermesAttention(paneText: string): DetectedAttention | nul
   return null
 }
 
+// Codex CLI: its approval prompt is a flat choice list, no box frame. Matched on the
+// question line plus the "Press enter to confirm" hint, so a numbered list in ordinary
+// agent output cannot be mistaken for a prompt.
+const CODEX_PROMPT_QUESTION = /Would you like to run the following command\?/i
+const CODEX_PROMPT_HINT = /Press enter to confirm or esc to cancel/i
+const CODEX_SELECTED_OPTION = /^\s*[›>]\s*1\.\s+\S/
+const CODEX_OPTION = /^\s*\d+\.\s+\S/
+
+/**
+ * Codex CLI (`codex`): its approval prompt ("Would you like to run the following
+ * command?" with numbered options and a `Press enter to confirm` footer). Codex has no
+ * clarify picker, so this is the only blocking state it raises.
+ */
+export function detectCodexAttention(paneText: string): DetectedAttention | null {
+  const lines = stripAnsi(paneText).split('\n')
+  while (lines.length > 0 && (lines[lines.length - 1] ?? '').trim() === '') lines.pop()
+  const tail = lines.slice(-SCAN_LINES)
+  const text = tail.join('\n')
+
+  const isChoiceList = tail.some(line => CODEX_SELECTED_OPTION.test(line))
+    && tail.some(line => CODEX_OPTION.test(line))
+    && CODEX_PROMPT_HINT.test(text)
+  if (!CODEX_PROMPT_QUESTION.test(text) && !isChoiceList) return null
+
+  // The command being asked about is the most useful thing to show on the tile; fall back
+  // to the model's stated reason, then to a generic label.
+  const trimmed = tail.map(line => line.trim())
+  const command = trimmed.find(line => line.startsWith('$ ') && line.length > 2)
+  const reason = trimmed.find(line => line.startsWith('Reason:'))
+  const detail = command ?? reason ?? 'codex is waiting for command approval'
+  return { reason: 'approval', detail: truncate(detail) }
+}
+
 // Providers with a detector. Everything else reports no attention for now; adding a
 // provider means adding one function here — the sweep, the API field and the web badge
 // are provider-agnostic.
 const DETECTORS: Partial<Record<Provider, AttentionDetector>> = {
   hermes: detectHermesAttention,
+  codex: detectCodexAttention,
 }
 
 export function detectAgentAttention(agent: Pick<AgentRecord, 'provider'>, paneText: string): DetectedAttention | null {
