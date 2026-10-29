@@ -153,12 +153,38 @@ export function detectCodexAttention(paneText: string): DetectedAttention | null
   return { reason: 'approval', detail: truncate(detail) }
 }
 
+// OpenCode: "△ Permission required" with a kind line and a button row ("Allow once
+// Allow always Reject"). No numbering and no caret, so the button row is the marker.
+const OPENCODE_PROMPT_TITLE = /Permission required/i
+const OPENCODE_ALLOW_ONCE = /Allow once/i
+const OPENCODE_REJECT = /Reject\b/i
+
+/**
+ * OpenCode CLI (`opencode`): its permission dialog. Also covers the file-edit variant —
+ * the title and the button row are the same, only the kind line differs.
+ */
+export function detectOpencodeAttention(paneText: string): DetectedAttention | null {
+  const lines = stripAnsi(paneText).split('\n')
+  while (lines.length > 0 && (lines[lines.length - 1] ?? '').trim() === '') lines.pop()
+  const tail = lines.slice(-SCAN_LINES)
+  const text = tail.join('\n')
+
+  if (!OPENCODE_PROMPT_TITLE.test(text) || !OPENCODE_ALLOW_ONCE.test(text) || !OPENCODE_REJECT.test(text)) return null
+
+  const trimmed = tail.map(line => cleanBoxLine(line))
+  const command = trimmed.find(line => line.startsWith('$ ') && line.length > 2)
+  const kind = trimmed.find(line => line.startsWith('#'))
+  const detail = command ?? kind ?? 'opencode is waiting for permission'
+  return { reason: 'approval', detail: truncate(detail) }
+}
+
 // Providers with a detector. Everything else reports no attention for now; adding a
 // provider means adding one function here — the sweep, the API field and the web badge
 // are provider-agnostic.
 const DETECTORS: Partial<Record<Provider, AttentionDetector>> = {
   hermes: detectHermesAttention,
   codex: detectCodexAttention,
+  opencode: detectOpencodeAttention,
 }
 
 export function detectAgentAttention(agent: Pick<AgentRecord, 'provider'>, paneText: string): DetectedAttention | null {

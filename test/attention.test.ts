@@ -3,6 +3,7 @@ import {
   detectAgentAttention,
   detectCodexAttention,
   detectHermesAttention,
+  detectOpencodeAttention,
   nextAttentionState,
   sweepAttention,
   type AttentionSweepOptions,
@@ -107,6 +108,19 @@ retry this command, do NOT rephrase it, and do NOT attempt the same outcome via 
 ❯ Спросите о чём угодно или введите / для команд…
 ──────────────────────────────────────────────────────────────────────────
  ☤ deepseek-v4.1-flash · 26.4K/1M · [█░░] 3% · ◎ 31.3% · ◷ 2.1с · 1m · ⏲ 0s · /tmp
+`
+
+// Captured from a live `opencode` pane (v1.18, permission.bash=ask): the permission dialog.
+// OpenCode draws no box frame line and no numbered options — just a title, a kind line,
+// the command and a button row.
+const OPENCODE_PERMISSION_PROMPT = `
+  ┃  △ Permission required
+  ┃    # Shell command
+  ┃
+  ┃  $ touch /tmp/opencode-probe2
+  ┃
+  ┃                                                                                                                                                                                                                                          /tmp
+  ┃   Allow once   Allow always   Reject                                                                                                                                                    ctrl+f fullscreen  ⇆ select  enter confirm
 `
 
 describe('Hermes attention detection', () => {
@@ -263,5 +277,27 @@ describe('Codex attention detection', () => {
 
   it('is wired into the provider registry', () => {
     expect(detectAgentAttention({ provider: 'codex' }, CODEX_APPROVAL_PROMPT)?.reason).toBe('approval')
+  })
+})
+
+describe('OpenCode attention detection', () => {
+  it('detects the permission dialog and shows the command', () => {
+    const detected = detectOpencodeAttention(OPENCODE_PERMISSION_PROMPT)
+    expect(detected?.reason).toBe('approval')
+    expect(detected?.detail).toBe('$ touch /tmp/opencode-probe2')
+  })
+
+  it('stays quiet on ordinary output that mentions permissions', () => {
+    const output = [
+      '  △ Permission required',
+      '    # Shell command',
+      '   the user has not answered yet',
+      '› Ask anything',
+    ].join('\n')
+    expect(detectOpencodeAttention(output)).toBeNull()
+  })
+
+  it('is wired into the provider registry', () => {
+    expect(detectAgentAttention({ provider: 'opencode' }, OPENCODE_PERMISSION_PROMPT)?.reason).toBe('approval')
   })
 })

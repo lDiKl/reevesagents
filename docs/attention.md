@@ -69,8 +69,10 @@ read the same record.
 
 ## Adding a provider
 
-Detectors exist for `hermes` (approval and clarify modals) and `codex` (its command
-approval prompt). Claude Code and the rest still report nothing. To add one:
+Detectors exist for `hermes` (approval and clarify modals), `codex` (its command approval
+prompt) and `opencode` (its permission dialog, `permission.bash = "ask"`; with the default
+permissions OpenCode never asks, so there is nothing to flag). Claude Code and the rest
+still report nothing. To add one:
 
 1. Capture a real prompt: run the provider in a pane, trigger its approval overlay and
    `tmux capture-pane -p -S -40 -t <pane>`.
