@@ -58,14 +58,15 @@ read the same record.
 
 ## Where it is shown
 
-- **Agent tile** (web UI): a filled pill with a pulsing dot — `approval needed`,
-  `answer needed`, `question waiting` — in the warning colour, red for approvals. The
-  tooltip carries `detail`, so the command or the question is readable without opening the
-  window.
+- **Agent tile status** (web UI): the status slot shows the attention instead of the
+  lifecycle word — `approval needed` (red, pulsing dot) or `answer needed` (amber) — and
+  the card gets a coloured left edge. The lifecycle value is not lost: it sits in the
+  tooltip next to the prompt text, and it returns to the tile by itself as soon as the
+  prompt is gone. Nothing in the record is rewritten to fake a status.
 - **Tab title**: `(2) ReevesAgents web` while two agents need attention, which survives a
-  background tab where the badge is not visible.
+  background tab where the tile is not visible.
 - **Pending MCP approvals** raised through `request_approval` are mapped onto the same
-  badge (`source: "approval"`), so the two channels read the same way.
+  status slot (`source: "approval"`), so the two channels read the same way.
 
 ## Adding a provider
 

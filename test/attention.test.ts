@@ -136,6 +136,15 @@ describe('Hermes attention detection', () => {
     expect(detected?.detail).toContain('Синий или зелёный')
   })
 
+  // Regression: an old clarify question can still be on screen above a fresh approval box.
+  // Classifying by the whole tail turned that approval into an "answer" prompt.
+  it('classifies by the modal that is open, not by stale text above it', () => {
+    const stale = '☤ Hermes\nСколько строк в отчёте — 10 или 20?\n──────────────────────────'
+    const detected = detectHermesAttention(`${stale}\n${HERMES_APPROVAL_MODAL}`)
+    expect(detected?.reason).toBe('approval')
+    expect(detected?.detail).toContain('rm -rf /tmp/reeves-probe-attention2')
+  })
+
   // A finished turn that ends with a question looks exactly the same in the pane as one
   // whose answer is already typed into the input box, so it must NOT raise a badge: that
   // heuristic hung "ждёт ответа" on agents the operator had already answered.

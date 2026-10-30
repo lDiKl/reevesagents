@@ -87,9 +87,15 @@ export function detectHermesAttention(paneText: string): DetectedAttention | nul
     && ANSWER_COUNTDOWN.test(text)
 
   if (hasModal) {
-    // The command / question being asked sits between the title and the first option.
+    // Scope the body to the modal that is actually open: from its own top corner to the
+    // first option. Taking the whole tail would let an older question still visible above
+    // the box ("…10 или 20?") turn an approval prompt into an answer prompt.
     const optionIndex = tail.findIndex(line => NUMBERED_OPTION.test(line))
-    const body = tail.slice(0, optionIndex === -1 ? tail.length : optionIndex)
+    let bodyStart = 0
+    for (let i = (optionIndex === -1 ? tail.length : optionIndex) - 1; i >= 0; i -= 1) {
+      if (BOX_CORNER.test(tail[i] ?? '')) { bodyStart = i + 1; break }
+    }
+    const body = tail.slice(bodyStart, optionIndex === -1 ? tail.length : optionIndex)
       .map(cleanBoxLine)
       .filter(line => line.length > 0 && !line.startsWith('⚠'))
     const detail = body.length > 0 ? body[body.length - 1]! : ''

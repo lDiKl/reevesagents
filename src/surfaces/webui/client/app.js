@@ -1153,32 +1153,28 @@
 
     const tail = document.createElement('span')
     tail.className = 'card-tail'
-    if (agent.attention) {
-      // The operator may be on another tab or window: the badge must be visible without
-      // hovering, and the dot blinks so it reads as "act now", not as another status chip.
-      const attention = document.createElement('span')
-      attention.className = 'card-attention'
-      attention.dataset.reason = agent.attention.reason
-      const pulse = document.createElement('span')
-      pulse.className = 'attention-pulse'
-      pulse.setAttribute('aria-hidden', 'true')
-      attention.appendChild(pulse)
-      const label = document.createElement('span')
-      label.textContent = attentionLabel(agent.attention.reason)
-      attention.appendChild(label)
-      attention.title = agent.attention.detail
-        ? `${attentionLabel(agent.attention.reason)} · ${agent.attention.detail}`
-        : attentionLabel(agent.attention.reason)
-      card.dataset.attention = agent.attention.reason
-      card.appendChild(attention)
-    }
     const dot = document.createElement('span')
     dot.className = 'dot'
     dot.dataset.status = agent.status
+    if (agent.attention) dot.dataset.attention = agent.attention.reason
     tail.appendChild(dot)
     const status = document.createElement('span')
     status.className = 'card-status'
-    status.textContent = statusLabel(agent.status)
+    // Attention takes over this slot instead of sitting next to it: two indicators on one
+    // card read as two different states. The lifecycle value is not lost — it moves into
+    // the tooltip and comes back by itself when the prompt is resolved.
+    if (agent.attention) {
+      const label = attentionLabel(agent.attention.reason)
+      status.dataset.attention = agent.attention.reason
+      status.textContent = label
+      status.title = agent.attention.detail
+        ? `${label} · ${statusLabel(agent.status)} · ${agent.attention.detail}`
+        : `${label} · ${statusLabel(agent.status)}`
+      card.dataset.attention = agent.attention.reason
+    } else {
+      status.textContent = statusLabel(agent.status)
+      status.title = statusLabel(agent.status)
+    }
     tail.appendChild(status)
     const availability = document.createElement('span')
     availability.className = 'card-open-hint'
