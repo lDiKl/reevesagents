@@ -67,8 +67,8 @@ function containsAny(haystack: string, needles: string[]): boolean {
 }
 
 /**
- * Hermes (`hermes chat`): a blocking approval / clarify / sudo modal, a gate that never
- * reached the UI, or a finished turn whose last line is an open question.
+ * Hermes (`hermes chat`): a blocking approval / clarify / sudo modal, or a gate that never
+ * reached the UI. Detection is deliberately limited to panes that *block*.
  *
  * The modal is matched structurally (box corner + numbered option + ↑/↓ hint + countdown)
  * so it works in every UI language; keywords only decide *which* kind of prompt it is.
@@ -193,10 +193,6 @@ export function detectAgentAttention(agent: Pick<AgentRecord, 'provider'>, paneT
   return detector(paneText)
 }
 
-export function hasDetector(provider: Provider): boolean {
-  return Boolean(DETECTORS[provider])
-}
-
 export function nextAttentionState(
   previous: AttentionState | null,
   detected: DetectedAttention | null,
@@ -268,7 +264,7 @@ export function sweepAttention(options: AttentionSweepOptions = {}): number {
 /** Sweep at most once per `throttleMs`; safe to call from a 1.5 s UI tick. */
 export function sweepAttentionThrottled(options: AttentionSweepOptions = {}): number {
   const nowMs = options.now ? options.now().getTime() : Date.now()
-  const throttleMs = options.throttleMs ?? 2000
+  const throttleMs = options.throttleMs ?? 1500
   if (nowMs - lastSweepAt < throttleMs) return 0
   return sweepAttention(options)
 }
