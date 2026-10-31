@@ -11,7 +11,7 @@ import {
 import type { AgentRecord, AttentionState } from '../src/core/types.js'
 
 // Captured from a live `hermes chat` pane (approvals.mode=manual, ru UI): the blocking
-// approval modal as prompt_toolkit draws it. Fixtures stay verbatim — if Hermes changes
+// approval modal as prompt_toolkit draws it. Fixtures stay verbatim: if Hermes changes
 // its chrome, this test is the alarm that the detector needs a new marker.
 const HERMES_APPROVAL_MODAL = `
 ╭────────────────────────────────────────────────╮
@@ -34,7 +34,7 @@ const HERMES_APPROVAL_MODAL = `
 `
 
 // Captured from a live `hermes chat` pane (ru UI): the clarify picker. Unlike the
-// approval modal it is not an approval — the body ends with a question.
+// approval modal it is not an approval: the body ends with a question.
 const HERMES_CLARIFY_MODAL = `
 ╭─ Hermes Agent ждёт вашего ответа ──────────────╮
 │ 1 вопрос                                       │
@@ -111,7 +111,7 @@ retry this command, do NOT rephrase it, and do NOT attempt the same outcome via 
 `
 
 // Captured from a live `opencode` pane (v1.18, permission.bash=ask): the permission dialog.
-// OpenCode draws no box frame line and no numbered options — just a title, a kind line,
+// OpenCode draws no box frame line and no numbered options: just a title, a kind line,
 // the command and a button row.
 const OPENCODE_PERMISSION_PROMPT = `
   ┃  △ Permission required
@@ -228,14 +228,23 @@ function agent(overrides: Partial<AgentRecord> = {}): AgentRecord {
 }
 
 describe('attention sweep', () => {
-  function sweep(paneText: string, previous: AttentionState | null = null) {
+  function sweep(
+    paneText: string,
+    previous: AttentionState | null = null,
+    agentOverrides: Partial<AgentRecord> = {},
+    extra: Partial<AttentionSweepOptions> = {},
+  ) {
     const updates: Array<{ id: string; patch: { attention?: AttentionState | null } }> = []
     const options: AttentionSweepOptions = {
       capture: () => paneText,
+      // Default seams for every test that is not about pane membership: the sweep must not
+      // reach a real tmux server. The membership rule has its own tests below.
+      paneInSession: () => true,
       now: () => new Date('2026-10-28T11:00:00.000Z'),
       runs: () => [{ id: 'r1', ended_at: null } as never],
-      agents: () => [agent({ attention: previous })],
+      agents: () => [agent({ attention: previous, ...agentOverrides })],
       update: (_runId, agentId, patch) => { updates.push({ id: agentId, patch }) },
+      ...extra,
     }
     const changed = sweepAttention(options)
     return { changed, updates }
@@ -258,6 +267,45 @@ describe('attention sweep', () => {
     const { changed, updates } = sweep(HERMES_IDLE_STATEMENT, open)
     expect(changed).toBe(1)
     expect(updates[0]?.patch.attention).toBeNull()
+  })
+
+  // Regression: pane ids survive a tmux server restart but then belong to another session,
+  // so a stored id can read a stranger's pane and persist its command line on this record.
+  it('does not read a pane id that no longer belongs to the agent session', () => {
+    const open: AttentionState = { reason: 'approval', detail: 'old', since: '2026-10-28T10:00:00.000Z' }
+    const captured: string[] = []
+    const { changed, updates } = sweep(HERMES_APPROVAL_MODAL, open, {}, {
+      capture: paneId => { captured.push(paneId); return HERMES_APPROVAL_MODAL },
+      paneInSession: () => false,
+    })
+    expect(captured).toEqual([])
+    // The badge cannot be trusted any more either: the pane it described is gone.
+    expect(changed).toBe(1)
+    expect(updates[0]?.patch.attention).toBeNull()
+  })
+
+  it('reads the pane while the stored id still belongs to the agent session', () => {
+    const probed: Array<[string, string]> = []
+    const { updates } = sweep(HERMES_APPROVAL_MODAL, null, {}, {
+      paneInSession: (session, paneId) => { probed.push([session, paneId]); return true },
+    })
+    expect(probed).toEqual([['reeves-x-aaaaaaaa', '%1']])
+    expect(updates[0]?.patch.attention?.reason).toBe('approval')
+  })
+
+  // The detail is raw pane text (an approval prompt carries the command line), and the
+  // record is surfaced by the MCP `list` output and the Web state as stored.
+  it('redacts a secret in the detail before persisting it', () => {
+    // Assembled at runtime so the repository never holds a key-shaped literal.
+    const fakeKey = ['sk', 'ant', 'abcdefghijklmnopqrstuvwxyz'].join('-')
+    const leaked = CODEX_APPROVAL_PROMPT.replace(
+      '$ touch /home/dmytro/codex-approval-probe2',
+      `$ curl -H "x-api-key: ${fakeKey}" https://example.test`,
+    )
+    const { updates } = sweep(leaked, null, { provider: 'codex' })
+    const detail = updates[0]?.patch.attention?.detail ?? ''
+    expect(detail).toContain('[REDACTED]')
+    expect(detail).not.toContain(fakeKey)
   })
 })
 

@@ -239,6 +239,11 @@ function redactAgent(agent: AgentRecord): AgentRecord {
     task: redactSecrets(agent.task),
     task_note: redactSecrets(agent.task_note),
     inbox: agent.inbox.map(message => ({ ...message, text: redactSecrets(message.text) })),
+    // The attention detail is captured pane text: an approval prompt carries the command
+    // line, so it can hold a key pasted into the agent's own prompt.
+    attention: agent.attention
+      ? { ...agent.attention, detail: redactSecrets(agent.attention.detail) }
+      : agent.attention,
   }
 }
 

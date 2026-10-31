@@ -1079,7 +1079,7 @@ button { letter-spacing: 0; }
 }
 
 /* Operator attention: "this agent is blocked on a human". It takes over the status slot
-   on the card — the dot pulses and the label replaces the lifecycle word — because this
+   on the card (the dot pulses and the label replaces the lifecycle word) because this
    is the one signal that must reach someone looking at another tab. */
 .dot[data-status][data-attention="approval"] {
   background: var(--error);

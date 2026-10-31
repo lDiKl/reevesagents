@@ -8,7 +8,8 @@
 // human" state. Hermes, Claude Code and Codex all render a blocking overlay in their own
 // TUI, so the pane is the only surface that is true for every provider.
 
-import { execTmux } from './tmux.js'
+import { execTmux, paneInSession, realDriver } from './tmux.js'
+import { redactSecrets } from './redact.js'
 import { listAgents, listRuns, updateAgent } from './runs.js'
 import type { AgentRecord, AttentionReason, AttentionState, Provider } from './types.js'
 
@@ -166,7 +167,7 @@ const OPENCODE_ALLOW_ONCE = /Allow once/i
 const OPENCODE_REJECT = /Reject\b/i
 
 /**
- * OpenCode CLI (`opencode`): its permission dialog. Also covers the file-edit variant —
+ * OpenCode CLI (`opencode`): its permission dialog. Also covers the file-edit variant:
  * the title and the button row are the same, only the kind line differs.
  */
 export function detectOpencodeAttention(paneText: string): DetectedAttention | null {
@@ -185,7 +186,7 @@ export function detectOpencodeAttention(paneText: string): DetectedAttention | n
 }
 
 // Providers with a detector. Everything else reports no attention for now; adding a
-// provider means adding one function here — the sweep, the API field and the web badge
+// provider means adding one function here: the sweep, the API field and the web badge
 // are provider-agnostic.
 const DETECTORS: Partial<Record<Provider, AttentionDetector>> = {
   hermes: detectHermesAttention,
@@ -212,6 +213,8 @@ export function nextAttentionState(
 export interface AttentionSweepOptions {
   // Test seam: capture a pane by id. Defaults to `tmux capture-pane -p`.
   capture?: (_paneId: string) => string
+  // Test seam: is this pane still part of the agent's session? Defaults to the tmux probe.
+  paneInSession?: (_session: string, _paneId: string) => boolean
   now?: () => Date
   throttleMs?: number
   runs?: typeof listRuns
@@ -223,6 +226,10 @@ function defaultCapture(paneId: string): string {
   return execTmux(['capture-pane', '-p', '-S', String(-SCAN_LINES), '-t', paneId])
 }
 
+function defaultPaneInSession(session: string, paneId: string): boolean {
+  return paneInSession(realDriver, session, paneId)
+}
+
 let lastSweepAt = 0
 
 /**
@@ -232,6 +239,7 @@ let lastSweepAt = 0
  */
 export function sweepAttention(options: AttentionSweepOptions = {}): number {
   const capture = options.capture ?? defaultCapture
+  const paneBelongsToAgent = options.paneInSession ?? defaultPaneInSession
   const now = options.now ? options.now() : new Date()
   const at = now.toISOString()
   const listRunsFn = options.runs ?? listRuns
@@ -244,7 +252,11 @@ export function sweepAttention(options: AttentionSweepOptions = {}): number {
     for (const agent of listAgentsFn(run.id)) {
       const previous = agent.attention ?? null
       let detected: DetectedAttention | null = null
-      if (!agent.ended_at && !agent.headless && agent.tmux_pane_id) {
+      // Pane ids are reused after a tmux server restart, so a stored id can address another
+      // session's pane; capturing it would persist a stranger's command line on this record.
+      // Same membership rule as the read path (peekAgent in runtime.ts).
+      if (!agent.ended_at && !agent.headless && agent.tmux_pane_id
+        && paneBelongsToAgent(agent.tmux_session, agent.tmux_pane_id)) {
         let paneText: string
         try {
           paneText = capture(agent.tmux_pane_id)
@@ -252,7 +264,11 @@ export function sweepAttention(options: AttentionSweepOptions = {}): number {
           // The window can disappear between the sweep and the capture; treat it as idle.
           paneText = ''
         }
-        detected = detectAgentAttention(agent, paneText)
+        const raw = detectAgentAttention(agent, paneText)
+        // The detail is raw pane text (an approval prompt carries the command line), so it
+        // can hold a pasted key. The field is surfaced by the MCP `list` output and the Web
+        // state as stored, so redaction has to happen before it is persisted.
+        detected = raw ? { reason: raw.reason, detail: redactSecrets(raw.detail) } : null
       }
       const next = nextAttentionState(previous, detected, at)
       if (next?.reason === previous?.reason && next?.detail === previous?.detail && next?.since === previous?.since) {

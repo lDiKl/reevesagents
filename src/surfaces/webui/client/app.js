@@ -1161,7 +1161,7 @@
     const status = document.createElement('span')
     status.className = 'card-status'
     // Attention takes over this slot instead of sitting next to it: two indicators on one
-    // card read as two different states. The lifecycle value is not lost — it moves into
+    // card read as two different states. The lifecycle value is not lost: it moves into
     // the tooltip and comes back by itself when the prompt is resolved.
     if (agent.attention) {
       const label = attentionLabel(agent.attention.reason)
